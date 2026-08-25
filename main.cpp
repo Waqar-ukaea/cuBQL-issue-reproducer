@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <vector>
@@ -14,6 +15,10 @@
 
 #include "cuBQL/bvh.h"
 #include "cuBQL/builder/omp.h"
+#include "cuBQL/math/Ray.h"
+#include "cuBQL/queries/triangleData/math/rayTriangleIntersections.h"
+#include "cuBQL/traversal/rayQueries.h"
+
 
 int main() {
 
@@ -51,23 +56,82 @@ int main() {
                           build_config,
                           gpu_id);
 
-  // The builder input bounds are not needed for traversal.
-  context.free(device_bounds);
-  device_bounds = nullptr;
 
   std::cout << "BVH nodes      : " << bvh.numNodes << '\n';
   std::cout << "BVH primitives : " << bvh.numPrims << '\n';
 
-  // TODO: perform ray traversal while the BVH and device mesh remain alive.
+  // Trace one ray from the centre of the cube towards its +X face. The
+  // non-axis-aligned direction avoids hitting the diagonal shared by the two
+  // triangles on that face. Since direction.x is 1, the expected hit is t=1.
+  cuBQL::Ray ray;
+  ray.origin = {0.0f, 0.0f, 0.0f};
+  ray.direction = {1.0f, 0.25f, 0.1f};
+  ray.tMin = 0.0f;
+  ray.tMax = CUBQL_INF;
+
+  int hit_primitive = -1;
+  float hit_distance = CUBQL_INF;
+
+  const int num_vertices = static_cast<int>(mesh.vertices.size());
+  const int num_triangles = static_cast<int>(mesh.indices.size());
   
+  #pragma omp target device(gpu_id) \
+    is_device_ptr(device_vertices, device_indices) \
+    map(to: ray) map(from: hit_primitive, hit_distance)
+  {
+    hit_primitive = -1;
+    hit_distance = CUBQL_INF;
+
+    cuBQL::TriangleMesh device_mesh {
+      device_vertices,
+      device_indices,
+      num_vertices,
+      num_triangles
+    };
+
+    cuBQL::Ray traversal_ray = ray;
+
+    auto intersect_primitive = [&](std::uint32_t primitive_id) -> float {
+      const cuBQL::Triangle triangle = device_mesh.getTriangle(primitive_id);
+      cuBQL::RayTriangleIntersection intersection;
+
+      if (intersection.compute(traversal_ray, triangle)) {
+        hit_primitive = static_cast<int>(primitive_id);
+        hit_distance = intersection.t;
+        traversal_ray.tMax = intersection.t;
+      }
+
+      return traversal_ray.tMax;
+    };
+
+    cuBQL::shrinkingRayQuery::forEachPrim(intersect_primitive,
+                                          bvh,
+                                          traversal_ray);
+  }
+
+  constexpr int expected_primitive = 10;
+  constexpr float expected_distance = 1.0f;
+
+  const bool correct_hit = hit_primitive == expected_primitive;
+
+  std::cout << "\n--------------------------------------\n";
+  std::cout << "Hit primitive     : " << hit_primitive << '\n';
+  std::cout << "Hit distance      : " << hit_distance << '\n';
+  std::cout << "Expected t        : " << expected_distance << '\n';
+  std::cout << "Expected hit prim : " << expected_primitive << '\n';
+  std::cout << "Traversal         : "
+            << (correct_hit ? "PASS" : "FAIL") << '\n';
+  std::cout << "--------------------------------------\n";
   // Release device memory
   cuBQL::omp::freeBVH(bvh, &context);
   bvh = {};
 
+  context.free(device_bounds);
   context.free(device_vertices);
   context.free(device_indices);
   device_vertices = nullptr;
   device_indices = nullptr;
+  device_bounds = nullptr;
   
-  return 0;
+  return correct_hit ? 0 : 1; // Return 0 on successful hit and 1 on failed
 }
