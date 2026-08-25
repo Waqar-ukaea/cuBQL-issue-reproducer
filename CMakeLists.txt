@@ -48,6 +48,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   )
 
   target_link_options(cubql-dist-stack-reproducer PRIVATE
+    -fopenmp=libomp
     -fopenmp-targets=nvptx64
     -Xopenmp-target
     -march=sm_${CUBQL_OMP_GPU_ARCH}
