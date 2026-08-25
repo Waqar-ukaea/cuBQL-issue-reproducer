@@ -1,15 +1,11 @@
+#include <cstdint>
 #include <iostream>
 #include <vector>
 
 #include <omp.h>
 
-// I'm not sure why exactly this is necessary but it is needed to get things 
-// to compile when I use llvm/clang. According to ChatGPT/Codex: 
-  /* 
-     Clang defines __CUDA_ARCH__ when compiling an OpenMP NVPTX device image,
-     even though CUDA language keywords and runtime constants are unavailable.
-  */
-
+// Clang defines __CUDA_ARCH__ when compiling an OpenMP NVPTX device image,
+// even though CUDA language keywords and runtime constants are unavailable.
 #if defined(__CUDA_ARCH__) && !defined(__CUDACC__)
 #undef __CUDA_ARCH__
 #endif
@@ -19,9 +15,8 @@
 #include "cuBQL/bvh.h"
 #include "cuBQL/builder/omp.h"
 
-int main(int argc, char** argv) {
+int main() {
 
-  const int host_id = omp_get_initial_device();
   const int gpu_id = omp_get_default_device();
 
   if (omp_get_num_devices() == 0) {
@@ -29,63 +24,50 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  cuBQL::omp::Context context(gpu_id);
+
   const HostTriangleMesh mesh = make_cube(); // Instantiate cube mesh
+  const std::vector<cuBQL::box3f> host_bounds = mesh.primitive_bounds();
 
   std::cout << "Vertices  : " << mesh.vertices.size() << '\n';
   std::cout << "Triangles : " << mesh.indices.size() << '\n';
 
-  // Transfer vertices to OpenMP device
-  const std::size_t vertex_bytes = mesh.vertices.size() * sizeof(cuBQL::vec3f);
-  auto* device_vertices = static_cast<cuBQL::vec3f*>(omp_target_alloc(vertex_bytes, gpu_id));
-  omp_target_memcpy(device_vertices,
-                    mesh.vertices.data(),
-                    vertex_bytes,
-                    0,
-                    0, 
-                    gpu_id,
-                    host_id);
+  cuBQL::vec3f* device_vertices = nullptr;
+  cuBQL::vec3i* device_indices = nullptr;
+  cuBQL::box3f* device_bounds = nullptr;
 
-  // Transfer indices to OpenMP device
-  const std::size_t index_bytes = mesh.indices.size() * sizeof(cuBQL::vec3i);
-  auto* device_indices = static_cast<cuBQL::vec3i*>(omp_target_alloc(index_bytes, gpu_id));
-  omp_target_memcpy(device_vertices,
-                    mesh.vertices.data(),
-                    index_bytes,
-                    0,
-                    0, 
-                    gpu_id,
-                    host_id);
-
-  // Transfer bounds data to OpenMP device
-  std::vector<cuBQL::box3f> host_bounds = mesh.primitive_bounds();
-  const std::size_t bounds_bytes = host_bounds.size() * sizeof(cuBQL::box3f);
-  auto* device_bounds = static_cast<cuBQL::box3f*>(omp_target_alloc(bounds_bytes, gpu_id));
-  omp_target_memcpy(device_bounds,
-                    host_bounds.data(),
-                    bounds_bytes,
-                    0,
-                    0, 
-                    gpu_id,
-                    host_id);
+  context.alloc_and_upload(device_vertices, mesh.vertices);
+  context.alloc_and_upload(device_indices, mesh.indices);
+  context.alloc_and_upload(device_bounds, host_bounds);
   
-  // Build OpenMP bvh
-  const int num_prims = host_bounds.size();
-  cuBQL::BuildConfig build_params;
+  // Build the OpenMP BVH. The convenience wrapper constructs its own context
+  // for the same device internally.
+  const auto num_primitives = static_cast<std::uint32_t>(host_bounds.size());
   cuBQL::bvh3f bvh;
+  cuBQL::BuildConfig build_config {};
   cuBQL::build_omp_target(bvh,
                           device_bounds,
-                          num_prims,
-                          build_params,
+                          num_primitives,
+                          build_config,
                           gpu_id);
 
+  // The builder input bounds are not needed for traversal.
+  context.free(device_bounds);
+  device_bounds = nullptr;
 
+  std::cout << "BVH nodes      : " << bvh.numNodes << '\n';
+  std::cout << "BVH primitives : " << bvh.numPrims << '\n';
+
+  // TODO: perform ray traversal while the BVH and device mesh remain alive.
   
+  // Release device memory
+  cuBQL::omp::freeBVH(bvh, &context);
+  bvh = {};
 
-  omp_target_free(device_vertices, gpu_id);
-  omp_target_free(device_indices, gpu_id);
-  omp_target_free(device_bounds, gpu_id);
-  omp_target_free(bvh.nodes, gpu_id);
-  omp_target_free(bvh.primIDs, gpu_id);
+  context.free(device_vertices);
+  context.free(device_indices);
+  device_vertices = nullptr;
+  device_indices = nullptr;
   
   return 0;
 }
