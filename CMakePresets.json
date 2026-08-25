@@ -1,0 +1,67 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+      }
+    },
+    {
+      "name": "llvm_release",
+      "inherits": ["base"],
+      "displayName": "LLVM OpenMP offload — Release",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "llvm_debug",
+      "inherits": ["llvm_release"],
+      "displayName": "LLVM OpenMP offload — Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "nvhpc_release",
+      "inherits": ["base"],
+      "displayName": "NVHPC OpenMP offload — Release",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "nvc",
+        "CMAKE_CXX_COMPILER": "nvc++"
+      }
+    },
+    {
+      "name": "nvhpc_debug",
+      "inherits": ["nvhpc_release"],
+      "displayName": "NVHPC OpenMP offload — Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "llvm_release",
+      "configurePreset": "llvm_release"
+    },
+    {
+      "name": "llvm_debug",
+      "configurePreset": "llvm_debug"
+    },
+    {
+      "name": "nvhpc_release",
+      "configurePreset": "nvhpc_release"
+    },
+    {
+      "name": "nvhpc_debug",
+      "configurePreset": "nvhpc_debug"
+    }
+  ]
+}
