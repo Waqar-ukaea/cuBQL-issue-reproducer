@@ -7,6 +7,7 @@
 
 // Clang defines __CUDA_ARCH__ when compiling an OpenMP NVPTX device image,
 // even though CUDA language keywords and runtime constants are unavailable.
+// This doesn't seem to affect nvc++ builds.
 #if defined(__CUDA_ARCH__) && !defined(__CUDACC__)
 #undef __CUDA_ARCH__
 #endif
