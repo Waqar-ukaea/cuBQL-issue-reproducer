@@ -60,12 +60,11 @@ int main() {
   std::cout << "BVH nodes      : " << bvh.numNodes << '\n';
   std::cout << "BVH primitives : " << bvh.numPrims << '\n';
 
-  // Trace one ray from the centre of the cube towards its +X face. The
-  // non-axis-aligned direction avoids hitting the diagonal shared by the two
-  // triangles on that face. Since direction.x is 1, the expected hit is t=1.
+  // Trace one ray from near the centre of the cube towards its +X face. The
+  // expected hit should be at a distance of 1
   cuBQL::Ray ray;
-  ray.origin = {0.0f, 0.0f, 0.0f};
-  ray.direction = {1.0f, 0.25f, 0.1f};
+  ray.origin = {0.0f, 0.25f, 0.1f}; // origin off centre to avoid intersection with diagonal
+  ray.direction = {1.0f, 0.0f, 0.1f};
   ray.tMin = 0.0f;
   ray.tMax = CUBQL_INF;
 
@@ -75,6 +74,7 @@ int main() {
   const int num_vertices = static_cast<int>(mesh.vertices.size());
   const int num_triangles = static_cast<int>(mesh.indices.size());
   
+  // omp region for a single ray
   #pragma omp target device(gpu_id) \
     is_device_ptr(device_vertices, device_indices) \
     map(to: ray) map(from: hit_primitive, hit_distance)
