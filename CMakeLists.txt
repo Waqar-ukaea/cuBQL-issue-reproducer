@@ -29,6 +29,7 @@ endif()
 # List of all reproducers to be compiled
 set(REPRODUCER_NAMES
   dist_stack_fail
+  bounds_extend_fail
 )
 
 # Create an interface library to store shared config between executables
