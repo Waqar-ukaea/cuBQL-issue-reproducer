@@ -1,37 +1,40 @@
-# cubql-openmp-dist-stack-issue-reproducer
+# cuBQL OpenMP issue reproducers
 
-A small reproducer for the OpenMP traversal/intersection issue observed when
-`CUBQL_DIST_STACK` is enabled in
-[`rayQueries.h`](https://github.com/NVIDIA/cuBQL/blob/20f9db19cdb160e2b83d8f05dfdb0437fe11fe24/cuBQL/traversal/rayQueries.h#L11),
-as reported in [NVIDIA/cuBQL#43](https://github.com/NVIDIA/cuBQL/issues/43).
+This repository contains small, focused reproducers for issues encountered when
+using cuBQL through its OpenMP GPU-offload pathway. Each reproducer is built as
+a separate executable so that the issues can be compiled, run, and reported
+independently.
 
-The repository contains a minimal executable which creates a hard-coded cube
-mesh made up of two triangles per face, builds a BVH over that mesh, and then
-traverses that BVH using the `ShrinkingRayTraversal` template.
+## Reproducers
 
-## Get the source
+| Executable | Description |
+| --- | --- |
+| `dist_stack_fail` | Reproduces the traversal/intersection issue observed when `CUBQL_DIST_STACK` is enabled in [`rayQueries.h`](https://github.com/NVIDIA/cuBQL/blob/20f9db19cdb160e2b83d8f05dfdb0437fe11fe24/cuBQL/traversal/rayQueries.h#L11), as reported in [NVIDIA/cuBQL#43](https://github.com/NVIDIA/cuBQL/issues/43). |
+| `bounds_extend_fail` | Reproduces an NVHPC OpenMP target failure while constructing a `cuBQL::box3d` and extending it with three `cuBQL::vec3d` vertices. On the affected setup, the optimized NVHPC build terminates with `CUDA_ERROR_LAUNCH_FAILED`, while the NVHPC Debug and LLVM builds complete successfully. |
 
-cuBQL is included as a Git submodule so ensure that this repo is cloned with submodules initialised:
+The executable sources are in `reproducers/`, and headers shared between
+reproducers are in `include/`.
+
+## Configuring and compiling the repo
+
+cuBQL is included as a Git submodule. After cloning the repository, initialise
+the submodule with:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-## GPU architecture
-
-The OpenMP target architecture is selected at configuration time with
+Once cloned, select the OpenMP target architecture at configuration time with
 `CUBQL_OMP_GPU_ARCH`. Supply the NVIDIA compute capability without a decimal
 point: for example, use `80` for compute capability 8.0 or `90` for compute
 capability 9.0.
 
-The default is `89` (since my laptop has an RTX 2000Ada).
+The default is `89`.
 
-The selected value is translated into the appropriate compiler option:
+The value is translated into the corresponding compiler option:
 
 - LLVM/Clang: `-march=sm_<architecture>`
 - NVHPC: `-gpu=cc<architecture>`
-
-## Configure and build
 
 Four CMake configure and build presets are provided:
 
@@ -42,45 +45,55 @@ Four CMake configure and build presets are provided:
 | `nvhpc_release` | NVHPC | Release |
 | `nvhpc_debug` | NVHPC | Debug |
 
-For example, configure and build an LLVM Release executable for compute
-capability 8.0:
+For example, configure and build all reproducers with LLVM in Release mode:
 
 ```bash
-cmake --preset llvm_release -DCUBQL_OMP_GPU_ARCH=80
+cmake --preset llvm_release
 cmake --build --preset llvm_release
 ```
 
-Configure and build an NVHPC Debug executable for compute capability 9.0:
+Configure and build all reproducers with NVHPC in Release mode:
 
 ```bash
-cmake --preset nvhpc_debug -DCUBQL_OMP_GPU_ARCH=90
-cmake --build --preset nvhpc_debug
+cmake --preset nvhpc_release
+cmake --build --preset nvhpc_release
+```
+
+To select a different GPU architecture, pass it during configuration:
+
+```bash
+cmake --preset nvhpc_release -DCUBQL_OMP_GPU_ARCH=80
+```
+
+A single reproducer can be built by naming its target:
+
+```bash
+cmake --build --preset nvhpc_release --target bounds_extend_fail
 ```
 
 ## Run
 
-Run the executable with mandatory target offloading so that OpenMP reports an
-error instead of falling back to host execution if the GPU image cannot be
-used:
+Use mandatory target offloading so that a missing or unusable GPU image is
+reported instead of silently falling back to the host:
 
 ```bash
 OMP_TARGET_OFFLOAD=MANDATORY \
-  ./build/llvm_release/cubql-dist-stack-reproducer
-```
+  ./build/llvm_release/dist_stack_fail
 
-Use the corresponding build directory when testing another preset, for
-example:
-
-```bash
 OMP_TARGET_OFFLOAD=MANDATORY \
-  ./build/nvhpc_release/cubql-dist-stack-reproducer
+  ./build/llvm_release/bounds_extend_fail
 ```
 
-## Expected output
+Replace `llvm_release` with the preset being tested, such as `nvhpc_release` or
+`nvhpc_debug`.
 
-The ray starts at the centre of the cube and travels towards its positive-X
-face. It should intersect primitive 10 at a distance of 1. So a successful hit
-would be:
+## Expected behavior
+
+### `dist_stack_fail`
+
+The reproducer creates a hard-coded cube mesh, builds a BVH over it, and traces
+a ray from inside the cube towards its positive-X face. The expected result is
+an intersection with primitive 10 at a distance of 1:
 
 ```text
 --------------------------------------
@@ -92,10 +105,7 @@ Traversal         : PASS
 --------------------------------------
 ```
 
-The executable returns exit status `0` for this result.
-
-The issue is reproduced when the traversal incorrectly reports no
-intersection:
+The issue is reproduced when traversal incorrectly reports no intersection:
 
 ```text
 --------------------------------------
@@ -107,4 +117,35 @@ Traversal         : FAIL
 --------------------------------------
 ```
 
-The executable returns exit status `1` for this result. 
+### `bounds_extend_fail`
+
+The reproducer constructs an empty `cuBQL::box3d` inside an OpenMP target
+region and extends it with the three vertices of a triangle. A successful run
+produces bounds from `(-1,-1,0)` to `(1,1,0)`:
+
+```text
+--------------------------------------
+Computed lower   : (-1,-1,0)
+Computed upper   : (1,1,0)
+Expected lower   : (-1,-1,0)
+Expected upper   : (1,1,0)
+Bounds extension : PASS
+--------------------------------------
+```
+
+On the affected setup, an NVHPC Release build instead terminates in the target
+region with an error similar to:
+
+```text
+Accelerator Fatal Error: call to cuMemcpyDtoHAsync returned error 719
+(CUDA_ERROR_LAUNCH_FAILED)
+```
+
+The NVHPC runtime terminates the process before the executable can print its
+own `FAIL` summary. The runtime error and nonzero exit status are therefore the
+failure signal for this reproducer. The corresponding NVHPC Debug build
+(`-g -O0`) completes successfully, making this an optimization-sensitive
+failure on the affected setup.
+
+Both executables return exit status `0` when their computed result is correct
+and `1` when they can report an incorrect result themselves.
